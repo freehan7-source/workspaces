@@ -1,0 +1,178 @@
+#!/bin/bash
+# ai workspace - 작업 관리 스크립트
+
+set -e
+
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+DIM='\033[2m'
+NC='\033[0m'
+
+DATE=$(date +%Y-%m-%d)
+YEAR=$(date +%Y)
+MONTH=$(date +%m)
+LOG_DIR="history/$YEAR/$MONTH"
+
+# ============================================================
+show_help() {
+    echo -e "${BLUE}ai workspace${NC}\n"
+    echo "  ${GREEN}./work start${NC} \"작업명\"     작업 시작 (history/ 로그 생성)"
+    echo "  ${GREEN}./work done${NC}  \"메시지\"     작업 완료 (상태 갱신 + git commit/push)"
+    echo "  ${GREEN}./work status${NC}             현재 상태"
+    echo ""
+}
+
+# ============================================================
+work_start() {
+    local TITLE="${1:-work}"
+    local SLUG=$(echo "$TITLE" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
+    local LOG_FILE="$LOG_DIR/$DATE-$SLUG.md"
+
+    mkdir -p "$LOG_DIR"
+
+    if [ -f "$LOG_FILE" ]; then
+        echo -e "${YELLOW}이미 존재: $LOG_FILE${NC}"
+        return 0
+    fi
+
+    local GIT_USER=$(git config user.name 2>/dev/null || echo "[이름]")
+
+    cat > "$LOG_FILE" << EOF
+---
+date: $DATE
+title: $TITLE
+tags: []
+---
+
+# $DATE $TITLE
+> (작업 완료 후 한 줄 요약 작성)
+
+## 목표
+> $TITLE
+
+## 작업 내용
+- 
+
+## 성과 포인트
+- 
+
+## 변경 사항
+- 
+
+## 이슈
+- 
+
+## 다음 작업
+- 
+
+---
+**작성자**: $GIT_USER
+EOF
+
+    echo -e "${GREEN}✅ $LOG_FILE${NC}"
+}
+
+# ============================================================
+update_status() {
+    local MSG="$1"
+    mkdir -p context
+
+    local RECENT_LOG=$(find history -name "*.md" -not -name "index.md" -type f 2>/dev/null | sort -r | head -1)
+    local NEXT_TASKS=""
+    if [ -n "$RECENT_LOG" ] && [ -f "$RECENT_LOG" ]; then
+        NEXT_TASKS=$(sed -n '/## 다음 작업/,/^---/p' "$RECENT_LOG" 2>/dev/null | grep "^- " | head -5)
+    fi
+
+    cat > context/current_status.md << EOF
+# 현재 진행 상황
+
+## 마지막 완료
+- $MSG ($(date '+%Y-%m-%d %H:%M'))
+
+## 다음 작업
+${NEXT_TASKS:-"- (미정)"}
+
+## 최근 작업
+EOF
+
+    find history -name "*.md" -not -name "index.md" -type f 2>/dev/null | sort -r | head -7 | while read file; do
+        echo "- $(basename "$file" .md)" >> context/current_status.md
+    done
+}
+
+# ============================================================
+update_index() {
+    cat > history/index.md << 'EOF'
+# 작업 이력
+
+| 날짜 | 작업 | 파일 |
+|------|------|------|
+EOF
+
+    find history -name "*.md" -not -name "index.md" -type f 2>/dev/null | sort -r | while read file; do
+        local fname=$(basename "$file" .md)
+        local fdate=$(echo "$fname" | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2}' || echo "")
+        local ftitle=$(echo "$fname" | sed 's/^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}-//' | tr '-' ' ')
+        echo "| ${fdate:-?} | ${ftitle:-$fname} | [$fname]($file) |" >> history/index.md
+    done
+}
+
+# ============================================================
+work_done() {
+    local MSG="${1:-작업 완료}"
+
+    # git diff를 오늘 로그에 추가
+    local TODAY_LOG=$(find "$LOG_DIR" -name "$DATE-*.md" -type f 2>/dev/null | sort -r | head -1)
+    if [ -n "$TODAY_LOG" ] && [ -f "$TODAY_LOG" ]; then
+        local DIFF=$(git diff --stat 2>/dev/null)
+        if [ -n "$DIFF" ]; then
+            printf '\n## 변경 파일 (자동)\n```\n%s\n```\n' "$DIFF" >> "$TODAY_LOG"
+        fi
+    fi
+
+    update_status "$MSG"
+    update_index
+
+    if [ -z "$(git status --porcelain)" ]; then
+        echo -e "${YELLOW}변경 사항 없음${NC}"
+        return 0
+    fi
+
+    git add .
+    git commit -m "$MSG" > /dev/null 2>&1
+    echo -e "${GREEN}✅ commit: $MSG${NC}"
+
+    if git remote | grep -q 'origin'; then
+        local BRANCH=$(git branch --show-current)
+        git push origin "$BRANCH" 2>/dev/null \
+            && echo -e "${GREEN}✅ push 완료${NC}" \
+            || echo -e "${YELLOW}push 실패 (수동: git push)${NC}"
+    fi
+}
+
+# ============================================================
+work_status() {
+    if [ -f "context/current_status.md" ]; then
+        grep -A 1 "## 마지막 완료" context/current_status.md 2>/dev/null | tail -1
+    fi
+    echo ""
+    local TODAY=$(find "$LOG_DIR" -name "$DATE-*.md" -type f 2>/dev/null)
+    if [ -n "$TODAY" ]; then
+        echo -e "  ${GREEN}오늘:${NC}"
+        for f in $TODAY; do echo "    $(basename "$f" .md)"; done
+    else
+        echo -e "  ${DIM}오늘 작업 없음${NC}"
+    fi
+    echo -e "  총: $(find history -name "*.md" -not -name "index.md" -type f 2>/dev/null | wc -l | tr -d ' ')개"
+}
+
+# ============================================================
+case "${1:-help}" in
+    start)  work_start "${2:-work}" ;;
+    done)   work_done "${2:-작업 완료}" ;;
+    status) work_status ;;
+    help|--help|-h) show_help ;;
+    *)  echo -e "${RED}알 수 없는 명령어: $1${NC}"; show_help; exit 1 ;;
+esac
