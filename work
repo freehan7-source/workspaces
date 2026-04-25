@@ -18,9 +18,13 @@ LOG_DIR="history/$YEAR/$MONTH"
 # ============================================================
 show_help() {
     echo -e "${BLUE}ai workspace${NC}\n"
-    echo "  ${GREEN}./work start${NC} \"작업명\"     작업 시작 (history/ 로그 생성)"
-    echo "  ${GREEN}./work done${NC}  \"메시지\"     작업 완료 (상태 갱신 + git commit/push)"
-    echo "  ${GREEN}./work status${NC}             현재 상태"
+    echo "  ${GREEN}./work start${NC}  \"작업명\"         작업 시작 (history/ 로그 생성)"
+    echo "  ${GREEN}./work save${NC}   \"메시지\"         중간 저장 (상태 갱신, commit 없음)"
+    echo "  ${GREEN}./work done${NC}   \"메시지\"         작업 완료 (상태 갱신 + git commit/push)"
+    echo "  ${GREEN}./work status${NC}                  현재 상태"
+    echo "  ${GREEN}./work jira list${NC}               Jira 태스크 목록"
+    echo "  ${GREEN}./work jira new${NC}  \"태스크명\"    새 태스크 생성"
+    echo "  ${GREEN}./work jira done${NC} \"파일명\"      태스크 완료 처리"
     echo ""
 }
 
@@ -53,19 +57,19 @@ tags: []
 > $TITLE
 
 ## 작업 내용
-- 
+-
 
 ## 성과 포인트
-- 
+-
 
 ## 변경 사항
-- 
+-
 
 ## 이슈
-- 
+-
 
 ## 다음 작업
-- 
+-
 
 ---
 **작성자**: $GIT_USER
@@ -120,10 +124,59 @@ EOF
 }
 
 # ============================================================
+update_jira_index() {
+    mkdir -p jira/open jira/done
+
+    cat > jira/index.md << 'EOF'
+# Jira 태스크 목록
+
+## 진행 중 (open)
+
+| 날짜 | 제목 | 유형 | 우선순위 |
+|------|------|------|---------|
+EOF
+
+    find jira/open -name "*.md" -type f 2>/dev/null | sort -r | while read file; do
+        local fname=$(basename "$file" .md)
+        local title=$(grep "^title:" "$file" 2>/dev/null | sed 's/^title: //' || echo "$fname")
+        local type=$(grep "^type:" "$file" 2>/dev/null | sed 's/^type: //' || echo "-")
+        local priority=$(grep "^priority:" "$file" 2>/dev/null | sed 's/^priority: //' || echo "-")
+        local fdate=$(echo "$fname" | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2}' || echo "")
+        echo "| ${fdate:-?} | [$title]($file) | $type | $priority |" >> jira/index.md
+    done
+
+    printf '\n## 완료 (done)\n\n| 날짜 | 제목 | 유형 |\n|------|------|------|\n' >> jira/index.md
+
+    find jira/done -name "*.md" -type f 2>/dev/null | sort -r | head -10 | while read file; do
+        local fname=$(basename "$file" .md)
+        local title=$(grep "^title:" "$file" 2>/dev/null | sed 's/^title: //' || echo "$fname")
+        local type=$(grep "^type:" "$file" 2>/dev/null | sed 's/^type: //' || echo "-")
+        local fdate=$(echo "$fname" | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2}' || echo "")
+        echo "| ${fdate:-?} | [$title]($file) | $type |" >> jira/index.md
+    done
+}
+
+# ============================================================
+work_save() {
+    local MSG="${1:-중간 저장}"
+
+    local TODAY_LOG=$(find "$LOG_DIR" -name "$DATE-*.md" -type f 2>/dev/null | sort -r | head -1)
+    if [ -n "$TODAY_LOG" ] && [ -f "$TODAY_LOG" ]; then
+        printf '\n### 저장포인트 (%s) — %s\n' "$(date '+%H:%M')" "$MSG" >> "$TODAY_LOG"
+        echo -e "${GREEN}✅ 저장포인트 추가: $TODAY_LOG${NC}"
+    else
+        echo -e "${YELLOW}오늘 작업 로그 없음. ./work start \"작업명\" 먼저 실행하세요${NC}"
+    fi
+
+    update_status "$MSG"
+    update_index
+    echo -e "${GREEN}✅ 저장: $MSG${NC}"
+}
+
+# ============================================================
 work_done() {
     local MSG="${1:-작업 완료}"
 
-    # git diff를 오늘 로그에 추가
     local TODAY_LOG=$(find "$LOG_DIR" -name "$DATE-*.md" -type f 2>/dev/null | sort -r | head -1)
     if [ -n "$TODAY_LOG" ] && [ -f "$TODAY_LOG" ]; then
         local DIFF=$(git diff --stat 2>/dev/null)
@@ -134,21 +187,26 @@ work_done() {
 
     update_status "$MSG"
     update_index
+    update_jira_index
 
     if [ -z "$(git status --porcelain)" ]; then
         echo -e "${YELLOW}변경 사항 없음${NC}"
-        return 0
+    else
+        git add .
+        git commit -m "$MSG" > /dev/null 2>&1
+        echo -e "${GREEN}✅ commit: $MSG${NC}"
+
+        if git remote | grep -q 'origin'; then
+            local BRANCH=$(git branch --show-current)
+            git push origin "$BRANCH" 2>/dev/null \
+                && echo -e "${GREEN}✅ push 완료${NC}" \
+                || echo -e "${YELLOW}push 실패 (수동: git push)${NC}"
+        fi
     fi
 
-    git add .
-    git commit -m "$MSG" > /dev/null 2>&1
-    echo -e "${GREEN}✅ commit: $MSG${NC}"
-
-    if git remote | grep -q 'origin'; then
-        local BRANCH=$(git branch --show-current)
-        git push origin "$BRANCH" 2>/dev/null \
-            && echo -e "${GREEN}✅ push 완료${NC}" \
-            || echo -e "${YELLOW}push 실패 (수동: git push)${NC}"
+    local OPEN_COUNT=$(find jira/open -name "*.md" -type f 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$OPEN_COUNT" -gt 0 ]; then
+        echo -e "\n${YELLOW}Jira open ${OPEN_COUNT}개 → ./work jira list${NC}"
     fi
 }
 
@@ -165,14 +223,117 @@ work_status() {
     else
         echo -e "  ${DIM}오늘 작업 없음${NC}"
     fi
-    echo -e "  총: $(find history -name "*.md" -not -name "index.md" -type f 2>/dev/null | wc -l | tr -d ' ')개"
+    echo -e "  history: $(find history -name "*.md" -not -name "index.md" -type f 2>/dev/null | wc -l | tr -d ' ')개"
+
+    local OPEN=$(find jira/open -name "*.md" -type f 2>/dev/null | wc -l | tr -d ' ')
+    [ "$OPEN" -gt 0 ] && echo -e "  ${YELLOW}Jira open: ${OPEN}개${NC}"
+    echo ""
+}
+
+# ============================================================
+work_jira_create() {
+    local TITLE="${1:-태스크}"
+    local TYPE="${2:-improvement}"
+    local PRIORITY="${3:-medium}"
+
+    mkdir -p jira/open
+
+    local SLUG=$(echo "$TITLE" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
+    local JIRA_FILE="jira/open/$DATE-$SLUG.md"
+
+    if [ -f "$JIRA_FILE" ]; then
+        echo -e "${YELLOW}이미 존재: $JIRA_FILE${NC}"
+        return 0
+    fi
+
+    local SOURCE_LOG=$(find history -name "*.md" -not -name "index.md" -type f 2>/dev/null | sort -r | head -1)
+
+    cat > "$JIRA_FILE" << EOF
+---
+date: $DATE
+title: $TITLE
+type: $TYPE
+priority: $PRIORITY
+source: ${SOURCE_LOG:-""}
+status: open
+---
+
+# $TITLE
+
+## 배경
+(어떤 작업 중 발견/도출되었는지)
+
+## 요구사항
+-
+
+## 완료 기준
+-
+
+## 참고
+-
+EOF
+
+    update_jira_index
+    echo -e "${GREEN}✅ $JIRA_FILE${NC}"
+}
+
+# ============================================================
+work_jira_close() {
+    local FILE="$1"
+    if [ -z "$FILE" ]; then
+        echo -e "${RED}파일명을 지정하세요${NC}"; return 1
+    fi
+
+    [ ! -f "$FILE" ] && [ -f "jira/open/$FILE" ] && FILE="jira/open/$FILE"
+
+    if [ ! -f "$FILE" ]; then
+        echo -e "${RED}파일 없음: $FILE${NC}"; return 1
+    fi
+
+    mkdir -p jira/done
+    local BASENAME=$(basename "$FILE")
+    mv "$FILE" "jira/done/$BASENAME"
+
+    sed -i.bak 's/^status: open/status: done/' "jira/done/$BASENAME" 2>/dev/null || true
+    rm -f "jira/done/$BASENAME.bak"
+
+    update_jira_index
+    echo -e "${GREEN}✅ 완료: jira/done/$BASENAME${NC}"
+}
+
+# ============================================================
+work_jira_list() {
+    local OPEN_COUNT=$(find jira/open -name "*.md" -type f 2>/dev/null | wc -l | tr -d ' ')
+    local DONE_COUNT=$(find jira/done -name "*.md" -type f 2>/dev/null | wc -l | tr -d ' ')
+
+    echo -e "\n${BLUE}Jira 태스크${NC}"
+    echo -e "  ${GREEN}open ($OPEN_COUNT)${NC}"
+
+    find jira/open -name "*.md" -type f 2>/dev/null | sort | while read file; do
+        local fname=$(basename "$file" .md)
+        local title=$(grep "^title:" "$file" 2>/dev/null | sed 's/^title: //' || echo "$fname")
+        local priority=$(grep "^priority:" "$file" 2>/dev/null | sed 's/^priority: //' || echo "medium")
+        local type=$(grep "^type:" "$file" 2>/dev/null | sed 's/^type: //' || echo "-")
+        echo -e "    ${DIM}[$priority]${NC} $title  ${DIM}($type)${NC}"
+    done
+
+    echo -e "  ${DIM}done ($DONE_COUNT)${NC}"
+    echo ""
 }
 
 # ============================================================
 case "${1:-help}" in
     start)  work_start "${2:-work}" ;;
+    save)   work_save "${2:-중간 저장}" ;;
     done)   work_done "${2:-작업 완료}" ;;
     status) work_status ;;
+    jira)
+        case "${2:-list}" in
+            new|create) work_jira_create "${3:-태스크}" "${4:-improvement}" "${5:-medium}" ;;
+            done)       work_jira_close "$3" ;;
+            list|*)     work_jira_list ;;
+        esac
+        ;;
     help|--help|-h) show_help ;;
-    *)  echo -e "${RED}알 수 없는 명령어: $1${NC}"; show_help; exit 1 ;;
+    *) echo -e "${RED}알 수 없는 명령어: $1${NC}"; show_help; exit 1 ;;
 esac

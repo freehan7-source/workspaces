@@ -1,0 +1,3 @@
+#!/bin/bash
+# ./save "메시지" — 중간 저장 (./work save 단축 실행)
+"$(dirname "$0")/work" save "$@"

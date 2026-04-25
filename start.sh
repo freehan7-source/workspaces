@@ -110,7 +110,7 @@ case "$PRESET" in
 ├── templates/             ← 문서 템플릿" ;;
 esac
 
-mkdir -p context history .kiro/steering
+mkdir -p context history input jira/open jira/done .kiro/steering
 echo -e "${GREEN}✅ [$PRESET_NAME] 구조 생성${NC}\n"
 
 # 3. context 파일 생성
@@ -228,13 +228,29 @@ case "$AI_CHOICE" in
 esac
 echo ""
 
-# 5. history/index.md 초기화
+# 5. 인덱스 파일 초기화
 cat > history/index.md << 'EOF'
 # 작업 이력
 
 | 날짜 | 작업 | 파일 |
 |------|------|------|
 EOF
+
+cat > jira/index.md << 'EOF'
+# Jira 태스크 목록
+
+## 진행 중 (open)
+
+| 날짜 | 제목 | 유형 | 우선순위 |
+|------|------|------|---------|
+
+## 완료 (done)
+
+| 날짜 | 제목 | 유형 |
+|------|------|------|
+EOF
+
+touch input/.gitkeep jira/open/.gitkeep jira/done/.gitkeep
 
 # 5.5 민감정보 필터링 설정
 echo -e "${BLUE}외부 출력(output/) 시 민감정보 자동 필터링을 적용할까요?${NC}"
@@ -276,6 +292,7 @@ cat > AGENTS.md << AGENTSEOF
 2. \`context/current_status.md\` — 현재 진행 상황 (마지막 작업, 다음 할 일)
 3. \`history/index.md\` — 전체 작업 이력 목록
 4. \`history/YYYY/MM/*.md\` — 개별 작업 상세 기록
+5. \`jira/index.md\` — Jira 태스크 목록 (open/done)
 
 ## 디렉터리 구조
 
@@ -289,18 +306,26 @@ project/
 ├── history/
 │   ├── index.md               ← 전체 작업 목록 (자동 갱신)
 │   └── YYYY/MM/날짜-작업명.md  ← 개별 작업 기록
+├── input/                     ← 작업 입력 데이터 (원본 파일, 소스 데이터)
+├── jira/
+│   ├── index.md               ← 태스크 목록 (자동 갱신)
+│   ├── open/                  ← 진행 중 태스크
+│   └── done/                  ← 완료된 태스크
 ├── output/                    ← 외부 출력물 (html, confluence 업로드용)
 $PRESET_TREE
-├── work                       ← 작업 관리 스크립트
-└── start.sh                   ← 초기 설정 스크립트
+├── save                       ← 중간 저장 단축 스크립트
+├── work                       ← 작업 관리 스크립트 (mac/linux)
+├── start.sh                   ← 초기 설정 스크립트 (mac/linux)
+└── start.ps1                  ← 초기 설정 스크립트 (windows)
 \`\`\`
 
 ## 작업 흐름
 
 \`\`\`
-./work start "작업명"  →  history/에 로그 생성
+./work start "작업명"       →  history/에 로그 생성
 (작업 수행)
-./work done "완료 메시지"  →  current_status.md 갱신 + history/index.md 갱신 + git commit/push
+./save "메시지"             →  중간 저장 (상태 갱신, commit 없음)
+./work done "완료 메시지"   →  current_status.md 갱신 + Jira 태스크 생성 + git commit/push
 \`\`\`
 
 ## 규칙
@@ -336,12 +361,57 @@ tags: [태그1, 태그2]
 - \`성과 포인트\`: 수치, 개선율, 해결한 문제 등 성과로 활용 가능한 내용
 - 성과 정리 요청 시: 모든 history에서 \`## 성과 포인트\` 섹션을 모아서 요약
 
+## Jira 태스크 생성 규칙
+
+\`./work done\` 실행 전, 오늘 history 로그를 분석하여 Jira 등록이 필요한 항목을 \`jira/open/\` 에 태스크 파일로 생성한다.
+
+**태스크 대상 (아래 기준에 해당하면 반드시 생성):**
+- \`## 이슈\` 섹션 — 버그, 장애, 재발 방지 필요 사항, 미해결 문제
+- \`## 다음 작업\` 섹션 — 후속 개선, 기능 추가, 조사 필요 항목
+- 작업 중 식별된 리팩터링, 성능 개선, 보안 취약점
+
+**파일 위치:** \`jira/open/YYYY-MM-DD-태스크명.md\`
+
+**태스크 파일 규격:**
+
+\`\`\`markdown
+---
+date: YYYY-MM-DD
+title: 태스크명
+type: bug | feature | improvement | investigation
+priority: high | medium | low
+source: history/YYYY/MM/날짜-작업명.md
+status: open
+---
+
+# 태스크명
+
+## 배경
+(어떤 작업 중 발견/도출되었는지)
+
+## 요구사항
+-
+
+## 완료 기준
+-
+
+## 참고
+-
+\`\`\`
+
+**완료 처리:** \`./work jira done 파일명\` → \`jira/done/\` 으로 이동
+
 ## 명령어
 
 \`\`\`
-./work start "작업명"     작업 시작 (history/ 로그 생성)
-./work done  "메시지"     작업 완료 (상태 갱신 + git commit/push)
-./work status             현재 상태 확인
+./work start "작업명"          작업 시작 (history/ 로그 생성)
+./save "메시지"                중간 저장 (상태 갱신, commit 없음)
+./work save "메시지"           중간 저장 (동일)
+./work done "메시지"           작업 완료 (상태 갱신 + git commit/push)
+./work status                  현재 상태 확인
+./work jira list               Jira 태스크 목록
+./work jira new "태스크명"     새 태스크 생성
+./work jira done "파일명"      태스크 완료 처리
 \`\`\`
 
 ## 출력 규격
@@ -378,13 +448,14 @@ fi
 
 [ -n "$2" ] && git remote add origin "$2" 2>/dev/null && echo -e "${GREEN}✅ remote: $2${NC}"
 
-chmod +x work 2>/dev/null || true
+chmod +x work save 2>/dev/null || true
 
 # 7. 완료
 echo ""
 echo -e "${GREEN}✅ ai workspace 준비 완료 [$PRESET_NAME]${NC}"
 echo ""
 echo -e "  ${GREEN}./work start${NC} \"작업명\"     작업 시작"
+echo -e "  ${GREEN}./save${NC}       \"메시지\"     중간 저장"
 echo -e "  ${GREEN}./work done${NC}  \"메시지\"     작업 완료 (git commit/push)"
 echo -e "  ${GREEN}./work status${NC}             현재 상태"
 echo ""

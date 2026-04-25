@@ -26,8 +26,12 @@ cd my-project
 
 ```bash
 ./work start "작업명"       # history/ 로그 생성 및 컨텍스트 준비
-./work done  "메시지"       # 상태 갱신 + 요약 + git commit/push
+./save "메시지"             # 중간 저장 (상태 갱신, commit 없음)
+./work done  "메시지"       # 상태 갱신 + Jira 태스크 생성 + git commit/push
 ./work status               # 현재 작업 상태 확인
+./work jira list            # Jira 태스크 목록
+./work jira new "태스크명"  # 새 태스크 생성
+./work jira done "파일명"   # 태스크 완료 처리
 ```
 
 ## 구조
@@ -42,7 +46,15 @@ project/
 ├── history/
 │   ├── index.md            # 전체 작업 목록 (자동 갱신)
 │   └── YYYY/MM/*.md        # 개별 작업 상세 기록 + 성과 포인트
+├── input/                  # 작업 입력 데이터 (원본 파일, 소스 데이터)
+├── jira/
+│   ├── index.md            # 태스크 목록 (자동 갱신)
+│   ├── open/               # 진행 중 태스크
+│   └── done/               # 완료된 태스크
 ├── output/                 # 외부 공유용 문서 (HTML/Confluence 호환)
+├── save                    # 중간 저장 단축 스크립트
+├── start.sh                # 초기 설정 (mac/linux)
+├── start.ps1               # 초기 설정 (windows)
 └── (업무별 폴더)            # 실제 분석 소스, 정책, 설정 파일 등
 ```
 
